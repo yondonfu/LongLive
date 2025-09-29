@@ -100,8 +100,10 @@ pip install flash-attn==2.7.4.post1 --no-build-isolation
 **Download checkpoints**
 
 ```
-huggingface-cli download Wan-AI/Wan2.1-T2V-1.3B --local-dir wan_models/Wan2.1-T2V-1.3B
-huggingface-cli download Efficient-Large-Model/LongLive --local-dir longlive_models
+hf download Wan-AI/Wan2.1-T2V-1.3B --local-dir wan_models/Wan2.1-T2V-1.3B --exclude "models_t5_umt5-xxl-enc-bf16.pth"
+# Use fp8 checkpoints for text encoder
+hf download Kijai/WanVideo_comfy umt5-xxl-enc-fp8_e4m3fn.safetensors --local-dir models/WanVideo_comfy
+hf download Efficient-Large-Model/LongLive --local-dir longlive_models
 ```
 
 **Single Prompt Video Generation**

@@ -135,8 +135,9 @@ if getattr(config, "adapter", None) and configure_lora_for_model is not None:
 # Move pipeline to appropriate dtype and device
 print("dtype", pipeline.generator.model.dtype)
 pipeline = pipeline.to(dtype=torch.bfloat16)
-if low_memory:
-    DynamicSwapInstaller.install_model(pipeline.text_encoder, device=device)
+# if low_memory:
+#     DynamicSwapInstaller.install_model(pipeline.text_encoder, device=device)
+pipeline.text_encoder.to(device=device)
 pipeline.generator.to(device=device)
 pipeline.vae.to(device=device)
 
@@ -195,6 +196,7 @@ for i, batch_data in tqdm(enumerate(dataloader), disable=(local_rank != 0)):
         text_prompts_list=prompts_list,
         switch_frame_indices=switch_frame_indices,
         return_latents=False,
+        low_memory=low_memory
     )
 
     current_video = rearrange(video, "b t c h w -> b t h w c").cpu() * 255.0

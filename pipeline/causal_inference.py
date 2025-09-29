@@ -25,7 +25,14 @@ class CausalInferencePipeline(torch.nn.Module):
             print(f"args.model_kwargs: {args.model_kwargs}")
         self.generator = WanDiffusionWrapper(
             **getattr(args, "model_kwargs", {}), is_causal=True) if generator is None else generator
-        self.text_encoder = WanTextEncoder() if text_encoder is None else text_encoder
+
+        # Initialize text encoder with custom path if provided
+        if text_encoder is None:
+            text_encoder_path = getattr(args, "wan_text_encoder_path", None)
+            self.text_encoder = WanTextEncoder(text_encoder_path=text_encoder_path)
+        else:
+            self.text_encoder = text_encoder
+
         self.vae = WanVAEWrapper() if vae is None else vae
 
         # Step 2: Initialize all causal hyperparmeters

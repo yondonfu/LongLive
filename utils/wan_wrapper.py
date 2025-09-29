@@ -4,6 +4,8 @@ import types
 from typing import List, Optional
 import torch
 from torch import nn
+import os
+from safetensors import safe_open
 
 from utils.scheduler import SchedulerInterface, FlowMatchScheduler
 from wan.modules.tokenizers import HuggingfaceTokenizer
@@ -14,31 +16,80 @@ from wan.modules.causal_model import CausalWanModel
 
 
 class WanTextEncoder(torch.nn.Module):
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        model_dir: Optional[str] = None,
+        text_encoder_path: Optional[str] = None,
+        tokenizer_path: Optional[str] = None,
+    ) -> None:
         super().__init__()
 
-        self.text_encoder = umt5_xxl(
-            encoder_only=True,
-            return_tokenizer=False,
-            dtype=torch.float32,
-            device=torch.device('cpu')
-        ).eval().requires_grad_(False)
-        self.text_encoder.load_state_dict(
-            torch.load("wan_models/Wan2.1-T2V-1.3B/models_t5_umt5-xxl-enc-bf16.pth",
-                       map_location='cpu', weights_only=False)
-        )
-        
-        # Move text encoder to GPU if available
-        if torch.cuda.is_available():
-            self.text_encoder = self.text_encoder.cuda()
+        # Determine paths with priority: specific paths > model_dir > default
+        if text_encoder_path is None:
+            model_dir = model_dir if model_dir is not None else "wan_models"
+            text_encoder_path = os.path.join(
+                model_dir, "Wan2.1-T2V-1.3B/models_t5_umt5-xxl-enc-bf16.pth"
+            )
+
+        if tokenizer_path is None:
+            model_dir = model_dir if model_dir is not None else "wan_models"
+            tokenizer_path = os.path.join(
+                model_dir, "Wan2.1-T2V-1.3B/google/umt5-xxl/"
+            )
+
+        # Load weights first, then create model with those weights
+        state_dict = self._load_state_dict(text_encoder_path)
+
+        # Create model with meta device for fast initialization
+        with torch.device("meta"):
+            self.text_encoder = (
+                umt5_xxl(
+                    encoder_only=True,
+                    return_tokenizer=False,
+                    dtype=torch.float32,
+                    device=torch.device("meta"),
+                )
+                .eval()
+                .requires_grad_(False)
+            )
+
+        # Directly assign weights and materialize on CPU
+        self.text_encoder.load_state_dict(state_dict, assign=True)
+        self.text_encoder = self.text_encoder.to("cpu")
 
         self.tokenizer = HuggingfaceTokenizer(
-            name="wan_models/Wan2.1-T2V-1.3B/google/umt5-xxl/", seq_len=512, clean='whitespace')
+            name=tokenizer_path, seq_len=512, clean='whitespace')
 
     @property
     def device(self):
-        # Assume we are always on GPU
-        return torch.cuda.current_device()
+        return next(self.parameters()).device
+
+    def _load_state_dict(self, weights_path: str) -> dict:
+        """Load text encoder weights with automatic format detection."""
+        if not os.path.exists(weights_path):
+            raise FileNotFoundError(
+                f"Text encoder weights not found at: {weights_path}"
+            )
+
+        if weights_path.endswith(".safetensors"):
+            # Load from safetensors and convert keys
+            state_dict = {}
+            with safe_open(weights_path, framework="pt", device="cpu") as f:
+                for key in f.keys():
+                    state_dict[key] = f.get_tensor(key)
+
+        elif weights_path.endswith(".pth") or weights_path.endswith(".pt"):
+            # Load from PyTorch format (assume already in correct format)
+            state_dict = torch.load(
+                weights_path, map_location="cpu", weights_only=False
+            )
+
+        else:
+            raise ValueError(
+                f"Unsupported file format. Expected .safetensors, .pth, or .pt, got: {weights_path}"
+            )
+
+        return state_dict
 
     def forward(self, text_prompts: List[str]) -> dict:
         ids, mask = self.tokenizer(
@@ -58,8 +109,12 @@ class WanTextEncoder(torch.nn.Module):
 
 
 class WanVAEWrapper(torch.nn.Module):
-    def __init__(self):
+    def __init__(self, model_dir: Optional[str] = None):
         super().__init__()
+
+        # Use provided model_dir or default to "wan_models"
+        model_dir = model_dir if model_dir is not None else "wan_models"
+
         mean = [
             -0.7571, -0.7089, -0.9113, 0.1075, -0.1745, 0.9653, -0.1517, 1.5508,
             0.4134, -0.0715, 0.5517, -0.3632, -0.1922, -0.9497, 0.2503, -0.2921
@@ -72,8 +127,9 @@ class WanVAEWrapper(torch.nn.Module):
         self.std = torch.tensor(std, dtype=torch.float32)
 
         # init model
+        vae_path = os.path.join(model_dir, "Wan2.1-T2V-1.3B/Wan2.1_VAE.pth")
         self.model = _video_vae(
-            pretrained_path="wan_models/Wan2.1-T2V-1.3B/Wan2.1_VAE.pth",
+            pretrained_path=vae_path,
             z_dim=16,
         ).eval().requires_grad_(False)
 
@@ -124,15 +180,20 @@ class WanDiffusionWrapper(torch.nn.Module):
             timestep_shift=8.0,
             is_causal=False,
             local_attn_size=-1,
-            sink_size=0
+            sink_size=0,
+            model_dir: Optional[str] = None
     ):
         super().__init__()
 
+        # Use provided model_dir or default to "wan_models"
+        model_dir = model_dir if model_dir is not None else "wan_models"
+        model_path = os.path.join(model_dir, f"{model_name}/")
+
         if is_causal:
             self.model = CausalWanModel.from_pretrained(
-                f"wan_models/{model_name}/", local_attn_size=local_attn_size, sink_size=sink_size)
+                model_path, local_attn_size=local_attn_size, sink_size=sink_size)
         else:
-            self.model = WanModel.from_pretrained(f"wan_models/{model_name}/")
+            self.model = WanModel.from_pretrained(model_path)
         self.model.eval()
 
         # For non-causal diffusion, all frames share the same timestep

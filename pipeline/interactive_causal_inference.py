@@ -9,6 +9,7 @@
 # SPDX-License-Identifier: CC-BY-NC-SA-4.0
 from typing import List, Optional
 import torch
+import gc
 
 from utils.wan_wrapper import WanDiffusionWrapper, WanTextEncoder, WanVAEWrapper
 from utils.memory import gpu, get_cuda_free_memory_gb, move_model_to_device_with_memory_preservation
@@ -127,12 +128,16 @@ class InteractiveCausalInferencePipeline(CausalInferencePipeline):
         cond_list = [self.text_encoder(text_prompts=p) for p in text_prompts_list]
 
         if low_memory:
-            gpu_memory_preservation = get_cuda_free_memory_gb(gpu) + 5
-            move_model_to_device_with_memory_preservation(
-                self.text_encoder,
-                target_device=gpu,
-                preserved_memory_gb=gpu_memory_preservation,
-            )
+            # gpu_memory_preservation = get_cuda_free_memory_gb(gpu) + 5
+            # move_model_to_device_with_memory_preservation(
+            #     self.text_encoder,
+            #     target_device=gpu,
+            #     preserved_memory_gb=gpu_memory_preservation,
+            # )
+            # Move to CPU after finished using
+            self.text_encoder = self.text_encoder.to("cpu")
+            torch.cuda.empty_cache()
+            gc.collect()
 
         output_device = torch.device('cpu') if low_memory else noise.device
         output = torch.zeros(

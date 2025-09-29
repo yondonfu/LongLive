@@ -12,7 +12,6 @@ model_kwargs:
   timestep_shift: 5.0
   sink_size: 3
 
-
 # Inference
 data_path: longlive_models/prompts/interactive_example.jsonl
 output_folder: videos/interactive
@@ -28,6 +27,8 @@ context_noise: 0
 
 generator_ckpt: longlive_models/models/longlive_base.pt
 lora_ckpt: longlive_models/models/lora.pt
+
+wan_text_encoder_path: models/WanVideo_comfy/umt5-xxl-enc-fp8_e4m3fn.safetensors
 
 adapter:
   type: "lora"
