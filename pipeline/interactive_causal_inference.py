@@ -10,6 +10,7 @@
 from typing import List, Optional
 import torch
 import gc
+import time
 
 from utils.wan_wrapper import WanDiffusionWrapper, WanTextEncoder, WanVAEWrapper
 from utils.memory import gpu, get_cuda_free_memory_gb, move_model_to_device_with_memory_preservation
@@ -103,6 +104,8 @@ class InteractiveCausalInferencePipeline(CausalInferencePipeline):
         switch_frame_indices: List[int],
         return_latents: bool = False,
         low_memory: bool = False,
+        decode_per_block: bool = False,
+        profile: bool = False
     ):
         """Generate a video and switch prompts at specified frame indices.
 
@@ -113,6 +116,7 @@ class InteractiveCausalInferencePipeline(CausalInferencePipeline):
                 we start using the prompts for segment i+1.
             return_latents: Whether to also return the latent tensor.
             low_memory: Enable low-memory mode.
+            decode_per_block: If True, decode each block immediately after generation rather than at the end.
         """
         batch_size, num_output_frames, num_channels, height, width = noise.shape
         assert len(text_prompts_list) >= 1, "text_prompts_list must not be empty"
@@ -138,6 +142,10 @@ class InteractiveCausalInferencePipeline(CausalInferencePipeline):
             self.text_encoder = self.text_encoder.to("cpu")
             torch.cuda.empty_cache()
             gc.collect()
+
+        # If decoding per block, maintain a list and concat at the end
+        if decode_per_block:
+            video_blocks = []
 
         output_device = torch.device('cpu') if low_memory else noise.device
         output = torch.zeros(
@@ -210,6 +218,9 @@ class InteractiveCausalInferencePipeline(CausalInferencePipeline):
                 :, current_start_frame : current_start_frame + current_num_frames
             ]
 
+            if profile:
+                start = time.time()
+
             # ---------------- Spatial denoising loop ----------------
             for index, current_timestep in enumerate(self.denoising_step_list):
                 timestep = (
@@ -247,8 +258,33 @@ class InteractiveCausalInferencePipeline(CausalInferencePipeline):
                         current_start=current_start_frame * self.frame_seq_length,
                     )
 
+            if profile:
+                diffusion_end = time.time()
+                diffusion_latency = diffusion_end - start
+                diffusion_fps = current_num_frames / diffusion_latency
+                print(f"generated {current_num_frames} frames fps={diffusion_fps:.2f} latency={diffusion_latency:.2f}s")
+
             # Record output
             output[:, current_start_frame : current_start_frame + current_num_frames] = denoised_pred.to(output.device)
+
+            # Decode block if decode_per_block is enabled
+            if decode_per_block:
+                block_latent = denoised_pred.to(noise.device)
+                block_video = self.vae.decode_to_pixel(block_latent, use_cache=False)
+                block_video = (block_video * 0.5 + 0.5).clamp(0, 1).to("cpu")
+
+                if profile:
+                    decode_end = time.time()
+                    decode_latency = decode_end - diffusion_end
+                    decode_fps = current_num_frames / decode_latency
+                    print(f"decoded {current_num_frames} frames fps={decode_fps:.2f} latency={decode_latency:.2f}s")
+
+
+                video_blocks.append(block_video)
+
+                del block_latent, block_video
+                torch.cuda.empty_cache()
+                gc.collect()
 
             # rerun with clean context to update cache
             context_timestep = torch.ones_like(timestep) * self.args.context_noise
@@ -264,9 +300,14 @@ class InteractiveCausalInferencePipeline(CausalInferencePipeline):
             # Update frame pointer
             current_start_frame += current_num_frames
 
-        # Standard decoding
-        video = self.vae.decode_to_pixel(output.to(noise.device), use_cache=False)
-        video = (video * 0.5 + 0.5).clamp(0, 1)
+        # Decode video
+        if decode_per_block:
+            # Concatenate all decoded blocks along the time dimension
+            video = torch.cat(video_blocks, dim=1)
+        else:
+            # Standard decoding at the end
+            video = self.vae.decode_to_pixel(output.to(noise.device), use_cache=False)
+            video = (video * 0.5 + 0.5).clamp(0, 1)
 
         if return_latents:
             return video, output
