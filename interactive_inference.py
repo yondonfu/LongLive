@@ -179,13 +179,18 @@ for i, batch_data in tqdm(enumerate(dataloader), disable=(local_rank != 0)):
     idx = batch_data["idx"].item()
     prompts_list: List[str] = batch_data["prompts_list"]  # type: ignore
 
+    height = config.get("height", 480)
+    width = config.get("width", 832)
+    latent_height = height // 8
+    latent_width = width // 8
+
     sampled_noise = torch.randn(
         [
             config.num_samples,
             config.num_output_frames,
             16,
-            60,
-            104,
+            latent_height,
+            latent_width,
         ],
         device=device,
         dtype=torch.bfloat16,

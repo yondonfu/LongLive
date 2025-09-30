@@ -45,7 +45,11 @@ class CausalInferencePipeline(torch.nn.Module):
 
         # hard code for Wan2.1-T2V-1.3B
         self.num_transformer_blocks = 30
-        self.frame_seq_length = 1560
+
+        height = args.get("height", 480)
+        width = args.get("width", 832)
+        scale_size = 16
+        self.frame_seq_length = (height // scale_size) * (width // scale_size)
 
         self.kv_cache1 = None
         self.args = args

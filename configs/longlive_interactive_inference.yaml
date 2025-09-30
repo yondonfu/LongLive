@@ -30,6 +30,10 @@ lora_ckpt: longlive_models/models/lora.pt
 
 wan_text_encoder_path: models/WanVideo_comfy/umt5-xxl-enc-fp8_e4m3fn.safetensors
 
+# Use these to set output resolution
+# height: 512
+# width: 512
+
 adapter:
   type: "lora"
   rank: 256                    # LoRA rank (typical values: 8, 16, 32, 64)
