@@ -259,10 +259,12 @@ class InteractiveCausalInferencePipeline(CausalInferencePipeline):
                     )
 
             if profile:
+                num_latents = current_num_frames
+                num_frames = num_latents * 4
                 diffusion_end = time.time()
                 diffusion_latency = diffusion_end - start
-                diffusion_fps = current_num_frames / diffusion_latency
-                print(f"generated {current_num_frames} frames fps={diffusion_fps:.2f} latency={diffusion_latency:.2f}s")
+                diffusion_fps = num_frames / diffusion_latency
+                print(f"denoised {num_latents} latents ({num_frames} frames) fps={diffusion_fps:.2f} latency={diffusion_latency:.2f}s")
 
             # Record output
             output[:, current_start_frame : current_start_frame + current_num_frames] = denoised_pred.to(output.device)
@@ -274,10 +276,16 @@ class InteractiveCausalInferencePipeline(CausalInferencePipeline):
                 block_video = (block_video * 0.5 + 0.5).clamp(0, 1).to("cpu")
 
                 if profile:
+                    num_latents = current_num_frames
+                    num_frames = num_latents * 4
                     decode_end = time.time()
                     decode_latency = decode_end - diffusion_end
-                    decode_fps = current_num_frames / decode_latency
-                    print(f"decoded {current_num_frames} frames fps={decode_fps:.2f} latency={decode_latency:.2f}s")
+                    decode_fps = num_frames / decode_latency
+                    print(f"decoded {num_latents} latents ({num_frames} frames) fps={decode_fps:.2f} latency={decode_latency:.2f}s")
+
+                    total_latency = diffusion_latency + decode_latency
+                    total_fps = num_frames / total_latency
+                    print(f"generated {num_frames} frames fps={total_fps:.2f} latency={total_latency:.2f}s")
 
 
                 video_blocks.append(block_video)
